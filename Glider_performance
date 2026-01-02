@@ -1,0 +1,193 @@
+clear; clc; close all;
+
+%% Parameter
+D_values = [4];
+
+% Initial conditions (THROWN FROM ABOVE ORIGIN)
+theta0 = -1;
+s0     = 99;
+y0     = [theta0; s0];
+
+% Trajectory initial height (y position)
+y_init = 1.0;          % > 0  (start above the origin)
+
+% Time span (integration will stop early via event when y hits 0)
+tspan = [0 9999];
+
+%% Controller parameters
+k          = 4.0;      % tracking gain for theta_cmd
+s_min      = 0.9;      % speed threshold for safety switch
+theta_dive = -0.30;    % commanded dive angle when slow (rad)
+
+% Second (lookahead) rule params
+gamma = 1.0;           % weight on future speed (higher -> more dive bias when slow)
+Dt    = 0.1;          % lookahead timestep used in theta_cmd formula (NOT solver step)
+
+% Optional actuator saturation (set to Inf to disable)
+u_max = Inf;           % e.g. 2.0
+
+%% Cases
+caseNames = { ...
+    'Uncontrolled', ...
+    'Rule 1 (no switch): \theta_{cmd}=0', ...
+    'Rule 1 (with switch)', ...
+    'Rule 2 (lookahead)' ...
+};
+nCases = numel(caseNames);
+
+% Enforce consistent colours across all figures
+caseColors = lines(nCases);
+
+for D = D_values
+
+    % Store results
+    sol = struct([]);
+
+    for c = 1:nCases
+        % Augmented state: z = [theta; s; x; y]
+        z0 = [y0; 0; y_init];
+
+        odefun = @(t,z) dyn_aug(t, z, D, c, k, s_min, theta_dive, gamma, Dt, u_max);
+        opts   = odeset('Events', @(t,z) hit_ground_event(t,z));
+
+        % Solve ODE (stops when y = 0 on descent)
+        [t, z] = ode45(odefun, tspan, z0, opts);
+
+        sol(c).t     = t;
+        sol(c).theta = z(:,1);
+        sol(c).s     = z(:,2);
+        sol(c).xpos  = z(:,3);
+        sol(c).ypos  = z(:,4);
+        sol(c).xEnd  = sol(c).xpos(end);
+        sol(c).tEnd  = t(end);
+        sol(c).sMin  = min(sol(c).s);
+    end
+
+    %% ---- TIME EVOLUTION COMPARISON ----
+    figure('Name',sprintf('Time Evolution, D=%g',D));
+    tiledlayout(2,1);
+
+    % theta(t)
+    nexttile; hold on; grid on;
+    h_theta = gobjects(nCases,1);
+    for c = 1:nCases
+        h_theta(c) = plot(sol(c).t, sol(c).theta, ...
+            'LineWidth', 2, 'Color', caseColors(c,:));
+    end
+    ylabel('\theta(t)');
+    title(sprintf('Time Evolution (all cases), D = %g', D));
+    legend(h_theta, caseNames, 'Location','best');
+
+    % s(t)
+    nexttile; hold on; grid on;
+    h_s = gobjects(nCases,1);
+    for c = 1:nCases
+        h_s(c) = plot(sol(c).t, sol(c).s, ...
+            'LineWidth', 2, 'Color', caseColors(c,:));
+    end
+    ylabel('s(t)'); xlabel('t');
+    legend(h_s, caseNames, 'Location','best');
+
+    %% ---- PHASE PORTRAIT + VECTOR FIELD (uncontrolled field) ----
+    figure('Name',sprintf('Phase Portrait, D=%g',D)); hold on; grid on;
+    xlabel('\theta'); ylabel('s');
+    title(sprintf('Phase Portrait (trajectories), D = %g', D));
+
+    % Vector field (uncontrolled)
+    [th_grid, s_grid] = meshgrid(linspace(-1.5,1.5,25), linspace(0.05,2.0,25));
+    dth = (s_grid.^2 - cos(th_grid)) ./ s_grid;
+    ds  = -sin(th_grid) - D*(s_grid.^2);
+    mag = sqrt(dth.^2 + ds.^2);
+    dth = dth ./ mag; ds = ds ./ mag;
+
+    h_field = quiver(th_grid, s_grid, dth, ds, 0.4, 'k');
+
+    % Trajectories
+    h_traj = gobjects(nCases,1);
+    for c = 1:nCases
+        h_traj(c) = plot(sol(c).theta, sol(c).s, ...
+            'LineWidth', 2, 'Color', caseColors(c,:));
+    end
+
+    legend([h_field; h_traj], ['Vector Field', caseNames], 'Location','best');
+
+    %% ---- TRAJECTORY COMPARISON (x-y) ----
+    figure('Name',sprintf('Trajectory, D=%g',D)); hold on; grid on; axis equal;
+    xlabel('x (horizontal distance)');
+    ylabel('y (vertical distance)');
+    title(sprintf('Trajectory (terminates at y=0), D = %g', D));
+
+    yline(0,'k--');
+
+    h_xy = gobjects(nCases,1);
+    for c = 1:nCases
+        h_xy(c) = plot(sol(c).xpos, sol(c).ypos, ...
+            'LineWidth', 2, 'Color', caseColors(c,:));
+    end
+    legend(h_xy, caseNames, 'Location','best');
+
+    %% ---- SUMMARY PRINT ----
+    fprintf('\nD = %g\n', D);
+    for c = 1:nCases
+        fprintf('  %-28s  range x_end = %8.4f,  flight time = %6.3f,  min(s) = %6.4f\n', ...
+            caseNames{c}, sol(c).xEnd, sol(c).tEnd, sol(c).sMin);
+    end
+end
+
+
+%% ===== Dynamics with augmented (x,y) state =====
+function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt, u_max)
+    theta = z(1);
+    s     = z(2);
+
+    % Base dynamics
+    dtheta = (s^2 - cos(theta)) / s;
+    ds     = -sin(theta) - D*(s^2);
+
+    % Control u added to dtheta
+    u = 0;
+
+    switch caseId
+        case 1
+            % Uncontrolled
+            u = 0;
+
+        case 2
+            % Rule 1 (no switch): theta_cmd = 0
+            theta_cmd = 0;
+            u = -k*(theta - theta_cmd);
+
+        case 3
+            % Rule 1 (with speed-safety switch)
+            if s < s_min
+                theta_cmd = theta_dive;   % dive to regain speed
+            else
+                theta_cmd = 0;            % level for horizontal distance
+            end
+            u = -k*(theta - theta_cmd);
+
+        case 4
+            % Rule 2 (lookahead analytic command)
+            theta_cmd = -atan((gamma*Dt)/max(s,1e-6));
+            u = -k*(theta - theta_cmd);
+    end
+
+    % Optional saturation
+    if isfinite(u_max)
+        u = max(-u_max, min(u_max, u));
+    end
+
+    % Kinematics
+    dx = s*cos(theta);
+    dy = s*sin(theta);
+
+    dzdt = [dtheta + u; ds; dx; dy];
+end
+
+%% ===== Event: stop when y hits 0 (ground) while descending =====
+function [value, isterminal, direction] = hit_ground_event(~, z)
+    y = z(4);
+    value = y;          % event when y = 0
+    isterminal = 1;     % stop integration
+    direction = -1;     % only when crossing downward
+end
