@@ -1,11 +1,11 @@
 clear; clc; close all;
 
 %% Parameter
-D_values = [4];
+D_values = [1];
 
 % Initial conditions (THROWN FROM ABOVE ORIGIN)
-theta0 = -1;
-s0     = 99;
+theta0 = -pi/4;
+s0     = 1;
 y0     = [theta0; s0];
 
 % Trajectory initial height (y position)
@@ -15,23 +15,20 @@ y_init = 1.0;          % > 0  (start above the origin)
 tspan = [0 9999];
 
 %% Controller parameters
-k          = 4.0;      % tracking gain for theta_cmd
+k          = 4;      % tracking gain for theta_cmd
 s_min      = 0.9;      % speed threshold for safety switch
 theta_dive = -0.30;    % commanded dive angle when slow (rad)
 
 % Second (lookahead) rule params
 gamma = 1.0;           % weight on future speed (higher -> more dive bias when slow)
-Dt    = 0.1;          % lookahead timestep used in theta_cmd formula (NOT solver step)
-
-% Optional actuator saturation (set to Inf to disable)
-u_max = Inf;           % e.g. 2.0
+Dt    = 0.1;           % lookahead timestep used in theta_cmd formula (NOT solver step)
 
 %% Cases
 caseNames = { ...
     'Uncontrolled', ...
-    'Rule 1 (no switch): \theta_{cmd}=0', ...
-    'Rule 1 (with switch)', ...
-    'Rule 2 (lookahead)' ...
+    'Initial Rule', ...
+    'Piecewise Rule', ...
+    'Lookahead Rule' ...
 };
 nCases = numel(caseNames);
 
@@ -47,7 +44,7 @@ for D = D_values
         % Augmented state: z = [theta; s; x; y]
         z0 = [y0; 0; y_init];
 
-        odefun = @(t,z) dyn_aug(t, z, D, c, k, s_min, theta_dive, gamma, Dt, u_max);
+        odefun = @(t,z) dyn_aug(t, z, D, c, k, s_min, theta_dive, gamma, Dt);
         opts   = odeset('Events', @(t,z) hit_ground_event(t,z));
 
         % Solve ODE (stops when y = 0 on descent)
@@ -63,7 +60,7 @@ for D = D_values
         sol(c).sMin  = min(sol(c).s);
     end
 
-    %% ---- TIME EVOLUTION COMPARISON ----
+    %% TIME EVOLUTION COMPARISON
     figure('Name',sprintf('Time Evolution, D=%g',D));
     tiledlayout(2,1);
 
@@ -115,7 +112,7 @@ for D = D_values
     figure('Name',sprintf('Trajectory, D=%g',D)); hold on; grid on; axis equal;
     xlabel('x (horizontal distance)');
     ylabel('y (vertical distance)');
-    title(sprintf('Trajectory (terminates at y=0), D = %g', D));
+    title(sprintf('Trajectory, D = %g', D));
 
     yline(0,'k--');
 
@@ -136,7 +133,7 @@ end
 
 
 %% ===== Dynamics with augmented (x,y) state =====
-function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt, u_max)
+function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt)
     theta = z(1);
     s     = z(2);
 
@@ -153,12 +150,12 @@ function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt, u_max)
             u = 0;
 
         case 2
-            % Rule 1 (no switch): theta_cmd = 0
+            % Initial Rule
             theta_cmd = 0;
             u = -k*(theta - theta_cmd);
 
         case 3
-            % Rule 1 (with speed-safety switch)
+            % Piecewise Rule
             if s < s_min
                 theta_cmd = theta_dive;   % dive to regain speed
             else
@@ -167,14 +164,9 @@ function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt, u_max)
             u = -k*(theta - theta_cmd);
 
         case 4
-            % Rule 2 (lookahead analytic command)
+            % Lookahead Rule
             theta_cmd = -atan((gamma*Dt)/max(s,1e-6));
             u = -k*(theta - theta_cmd);
-    end
-
-    % Optional saturation
-    if isfinite(u_max)
-        u = max(-u_max, min(u_max, u));
     end
 
     % Kinematics
