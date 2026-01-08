@@ -3,25 +3,25 @@ clear; clc; close all;
 %% Parameter
 D_values = [1];
 
-% Initial conditions (THROWN FROM ABOVE ORIGIN)
+% Initial conditions
 theta0 = -pi/4;
 s0     = 1;
 y0     = [theta0; s0];
 
 % Trajectory initial height (y position)
-y_init = 1.0;          % > 0  (start above the origin)
+y_init = 1.0;        
 
-% Time span (integration will stop early via event when y hits 0)
+% Time span
 tspan = [0 9999];
 
 %% Controller parameters
-k          = 4;      % tracking gain for theta_cmd
-s_min      = 0.9;      % speed threshold for safety switch
-theta_dive = -0.30;    % commanded dive angle when slow (rad)
+k          = 4;        % tracking gain for theta_cmd
+s_min      = 0.9;      % minimum speed
+theta_dive = -0.30;    % commanded dive angle
 
 % Second (lookahead) rule params
-gamma = 1.0;           % weight on future speed (higher -> more dive bias when slow)
-Dt    = 0.1;           % lookahead timestep used in theta_cmd formula (NOT solver step)
+gamma = 1.0;           % weight on future speed
+Dt    = 0.1;           % lookahead timestep used in theta_cmd formula
 
 %% Cases
 caseNames = { ...
@@ -32,7 +32,7 @@ caseNames = { ...
 };
 nCases = numel(caseNames);
 
-% Enforce consistent colours across all figures
+% Enforce consistent colours
 caseColors = lines(nCases);
 
 for D = D_values
@@ -47,7 +47,7 @@ for D = D_values
         odefun = @(t,z) dyn_aug(t, z, D, c, k, s_min, theta_dive, gamma, Dt);
         opts   = odeset('Events', @(t,z) hit_ground_event(t,z));
 
-        % Solve ODE (stops when y = 0 on descent)
+        % Solve ODE
         [t, z] = ode45(odefun, tspan, z0, opts);
 
         sol(c).t     = t;
@@ -85,7 +85,7 @@ for D = D_values
     ylabel('s(t)'); xlabel('t');
     legend(h_s, caseNames, 'Location','best');
 
-    %% ---- PHASE PORTRAIT + VECTOR FIELD (uncontrolled field) ----
+    %% PHASE PORTRAIT + VECTOR FIELD (uncontrolled field)
     figure('Name',sprintf('Phase Portrait, D=%g',D)); hold on; grid on;
     xlabel('\theta'); ylabel('s');
     title(sprintf('Phase Portrait (trajectories), D = %g', D));
@@ -108,7 +108,7 @@ for D = D_values
 
     legend([h_field; h_traj], ['Vector Field', caseNames], 'Location','best');
 
-    %% ---- TRAJECTORY COMPARISON (x-y) ----
+    %% TRAJECTORY COMPARISON (x-y)
     figure('Name',sprintf('Trajectory, D=%g',D)); hold on; grid on; axis equal;
     xlabel('x (horizontal distance)');
     ylabel('y (vertical distance)');
@@ -123,7 +123,7 @@ for D = D_values
     end
     legend(h_xy, caseNames, 'Location','best');
 
-    %% ---- SUMMARY PRINT ----
+    %% SUMMARY PRINT
     fprintf('\nD = %g\n', D);
     for c = 1:nCases
         fprintf('  %-28s  range x_end = %8.4f,  flight time = %6.3f,  min(s) = %6.4f\n', ...
@@ -132,7 +132,7 @@ for D = D_values
 end
 
 
-%% ===== Dynamics with augmented (x,y) state =====
+%% Dynamics with augmented (x,y) state
 function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt)
     theta = z(1);
     s     = z(2);
@@ -176,7 +176,7 @@ function dzdt = dyn_aug(~, z, D, caseId, k, s_min, theta_dive, gamma, Dt)
     dzdt = [dtheta + u; ds; dx; dy];
 end
 
-%% ===== Event: stop when y hits 0 (ground) while descending =====
+%% Event: stop when y hits 0
 function [value, isterminal, direction] = hit_ground_event(~, z)
     y = z(4);
     value = y;          % event when y = 0
